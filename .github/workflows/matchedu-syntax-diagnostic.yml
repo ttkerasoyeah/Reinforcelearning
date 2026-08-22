@@ -1,0 +1,46 @@
+name: MatchEdu syntax diagnostic
+
+on:
+  pull_request:
+    paths:
+      - 'matchedu/**'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare repaired JavaScript
+        run: |
+          FILE=$(find matchedu -type f -name 'MatchEdu_条件式路径预测与真实确认_三语完整交互版_20260822.html' | head -n 1)
+          test -n "$FILE"
+          export FILE
+          python - <<'PY'
+          from pathlib import Path
+          import os,re
+          p=Path(os.environ['FILE']);s=p.read_text(encoding='utf-8')
+          patches=[
+            ("Only route-changing facts')):i===2", "Only route-changing facts'))):i===2"),
+            ("Time, budget, participation')):i===3", "Time, budget, participation'))):i===3"),
+            ("Exclude unacceptable outcomes')):esc", "Exclude unacceptable outcomes'))):esc"),
+          ]
+          for a,b in patches:s=s.replace(a,b)
+          scripts=re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/matchedu.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+      - name: Parse with Acorn and print exact context
+        run: |
+          npm install --no-save --silent acorn
+          node - <<'JS'
+          const fs=require('fs');const acorn=require('acorn');const s=fs.readFileSync('/tmp/matchedu.js','utf8');
+          try{acorn.parse(s,{ecmaVersion:'latest',sourceType:'script'});console.log('ACORN SYNTAX PASS');}
+          catch(e){
+            console.error('ACORN SYNTAX FAIL',e.message,'line',e.loc&&e.loc.line,'column',e.loc&&e.loc.column,'pos',e.pos);
+            const start=Math.max(0,e.pos-450),end=Math.min(s.length,e.pos+450);
+            console.error('--- context ---\n'+s.slice(start,end)+'\n--- end context ---');
+            process.exit(1);
+          }
+          JS
