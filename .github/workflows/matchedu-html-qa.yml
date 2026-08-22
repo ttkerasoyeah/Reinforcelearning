@@ -1,0 +1,127 @@
+name: MatchEdu HTML QA
+
+on:
+  pull_request:
+    paths:
+      - 'matchedu/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate HTML
+        id: locate
+        run: |
+          FILE=$(find matchedu -type f -name '*.html' | head -n 1)
+          test -n "$FILE"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          echo "$FILE"
+      - name: Extract and syntax-check JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re, os
+          p = Path(os.environ['FILE'])
+          text = p.read_text(encoding='utf-8')
+          scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', text, flags=re.S|re.I)
+          assert scripts, 'No inline script found'
+          Path('/tmp/matchedu-app.js').write_text('\n'.join(scripts), encoding='utf-8')
+          print('scripts', len(scripts), 'chars', sum(map(len, scripts)))
+          PY
+          node --check /tmp/matchedu-app.js
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+      - name: Static HTML checks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from html.parser import HTMLParser
+          from collections import Counter
+          import os
+          p=Path(os.environ['FILE'])
+          text=p.read_text(encoding='utf-8')
+          class P(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.ids=[]; self.buttons=[]
+              def handle_starttag(self, tag, attrs):
+                  a=dict(attrs)
+                  if 'id' in a: self.ids.append(a['id'])
+                  if tag=='button': self.buttons.append(a)
+          q=P(); q.feed(text)
+          dup=[k for k,v in Counter(q.ids).items() if v>1]
+          assert not dup, f'Duplicate IDs: {dup}'
+          assert '<html lang=' in text
+          assert 'data-lang="zh"' in text and 'data-lang="ja"' in text and 'data-lang="en"' in text
+          assert 'replyTypes' in text and 'routeData' in text and 'resources' in text
+          assert 'undefined' not in text.replace("'undefined'",'').replace('"undefined"','')
+          print('ids',len(q.ids),'buttons',len(q.buttons))
+          PY
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+      - name: Browser smoke tests
+        run: |
+          python -m pip install --quiet selenium
+          python - <<'PY'
+          import os, time
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+          file=Path(os.environ['FILE']).resolve().as_uri()
+          opts=Options(); opts.add_argument('--headless=new'); opts.add_argument('--no-sandbox'); opts.add_argument('--disable-dev-shm-usage'); opts.add_argument('--window-size=1440,1000')
+          opts.set_capability('goog:loggingPrefs', {'browser':'ALL'})
+          driver=webdriver.Chrome(options=opts)
+          try:
+              driver.get(file); time.sleep(1)
+              assert 'MatchEdu' in driver.title
+              assert driver.find_element(By.ID,'main').is_displayed()
+              # language switching
+              driver.find_element(By.CSS_SELECTOR,'button[data-lang="ja"]').click(); time.sleep(.2)
+              assert driver.execute_script('return document.documentElement.lang')=='ja'
+              driver.find_element(By.CSS_SELECTOR,'button[data-lang="en"]').click(); time.sleep(.2)
+              assert driver.execute_script('return document.documentElement.lang')=='en'
+              driver.find_element(By.CSS_SELECTOR,'button[data-lang="zh"]').click(); time.sleep(.2)
+              # route navigation
+              driver.find_element(By.CSS_SELECTOR,'button[data-view="planner"]').click(); time.sleep(.2)
+              assert '免费路径规划' in driver.find_element(By.TAG_NAME,'body').text
+              # jump to routes through JS to test render
+              driver.execute_script("state.view='routes'; renderNav(); render();")
+              assert len(driver.find_elements(By.CSS_SELECTOR,'.route-card'))>=3
+              # scenario controls
+              driver.execute_script("state.view='scenario'; renderNav(); render();")
+              assert driver.find_element(By.ID,'simBudget').is_displayed()
+              # resources
+              driver.execute_script("state.view='resources'; renderNav(); render();")
+              assert len(driver.find_elements(By.CSS_SELECTOR,'.resource-card'))>=8
+              # intent question limit
+              driver.execute_script("state.view='intent'; renderNav(); render();")
+              assert len(driver.find_elements(By.CSS_SELECTOR,'[data-question]'))<=3
+              assert not driver.find_element(By.CSS_SELECTOR,'[data-share="identity"]').is_selected()
+              assert not driver.find_element(By.CSS_SELECTOR,'[data-share="contact"]').is_selected()
+              # replies and workbench
+              driver.execute_script("state.view='replies'; renderNav(); render();")
+              assert len(driver.find_elements(By.CSS_SELECTOR,'[data-reply]'))==8
+              driver.execute_script("state.view='work'; renderNav(); render();")
+              assert len(driver.find_elements(By.CSS_SELECTOR,'.task'))>=1
+              # provider and trust
+              driver.execute_script("state.view='provider'; renderNav(); render();")
+              assert driver.find_element(By.ID,'providerContent').is_displayed()
+              driver.execute_script("state.view='trust'; renderNav(); render();")
+              assert len(driver.find_elements(By.CSS_SELECTOR,'.check-result'))>=8
+              logs=[x for x in driver.get_log('browser') if x['level'] in ('SEVERE','WARNING')]
+              assert not logs, logs
+              # mobile overflow
+              driver.set_window_size(390,844); driver.get(file); time.sleep(.5)
+              overflow=driver.execute_script('return document.documentElement.scrollWidth > window.innerWidth + 2')
+              assert not overflow, 'Horizontal overflow on mobile'
+              print('browser smoke tests passed')
+          finally:
+              driver.quit()
+          PY
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
