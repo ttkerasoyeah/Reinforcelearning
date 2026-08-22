@@ -1,0 +1,129 @@
+name: Package MatchEdu HTML
+
+on:
+  pull_request:
+    paths:
+      - 'matchedu/**'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate and repair full HTML
+        id: locate
+        run: |
+          FILE=$(find matchedu -type f -name 'MatchEdu_条件式路径预测与真实确认_三语完整交互版_20260822.html' | head -n 1)
+          test -n "$FILE"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          export FILE
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          p=Path(os.environ['FILE'])
+          s=p.read_text(encoding='utf-8')
+          patches=[
+            ("Only route-changing facts')):i===2", "Only route-changing facts'))):i===2"),
+            ("Time, budget, participation')):i===3", "Time, budget, participation'))):i===3"),
+            ("Exclude unacceptable outcomes')):esc", "Exclude unacceptable outcomes'))):esc"),
+          ]
+          applied=0
+          for a,b in patches:
+              if a in s:
+                  s=s.replace(a,b)
+                  applied+=1
+          p.write_text(s,encoding='utf-8')
+          print('applied',applied,'targeted repairs')
+          PY
+      - name: JavaScript syntax check
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re,os
+          s=Path(os.environ['FILE']).read_text(encoding='utf-8')
+          scripts=re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',s,flags=re.S|re.I)
+          assert scripts,'No script found'
+          Path('/tmp/matchedu.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/matchedu.js
+      - name: Static HTML checks
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from html.parser import HTMLParser
+          from collections import Counter
+          import os
+          text=Path(os.environ['FILE']).read_text(encoding='utf-8')
+          class P(HTMLParser):
+              def __init__(self): super().__init__(); self.ids=[]
+              def handle_starttag(self,tag,attrs):
+                  a=dict(attrs)
+                  if 'id' in a:self.ids.append(a['id'])
+          p=P();p.feed(text)
+          dup=[k for k,v in Counter(p.ids).items() if v>1]
+          assert not dup,dup
+          for needle in ['data-lang="zh"','data-lang="ja"','data-lang="en"','replyTypes','routeData','resources','LocalStorage']:
+              assert needle in text,needle
+          print('static checks passed',len(p.ids),'ids')
+          PY
+      - name: Browser smoke tests
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+        run: |
+          python -m pip install --quiet selenium
+          python - <<'PY'
+          import os,time
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.chrome.options import Options
+          file=Path(os.environ['FILE']).resolve().as_uri()
+          o=Options();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage');o.add_argument('--window-size=1440,1000');o.set_capability('goog:loggingPrefs',{'browser':'ALL'})
+          d=webdriver.Chrome(options=o)
+          try:
+              d.get(file);time.sleep(1)
+              assert 'MatchEdu' in d.title
+              assert d.find_element(By.ID,'main').is_displayed()
+              for lang,expected in [('ja','ja'),('en','en'),('zh','zh-CN')]:
+                  d.find_element(By.CSS_SELECTOR,f'button[data-lang="{lang}"]').click();time.sleep(.15)
+                  assert d.execute_script('return document.documentElement.lang')==expected
+              tests=[('planner','#plannerPanel',1),('routes','.route-card',3),('scenario','#simBudget',1),('resources','.resource-card',8),('intent','[data-question]',1),('replies','[data-reply]',8),('work','.task',1),('provider','#providerContent',1),('trust','.check-result',8)]
+              for view,selector,count in tests:
+                  d.execute_script(f"state.view='{view}';renderNav();render();");time.sleep(.12)
+                  assert len(d.find_elements(By.CSS_SELECTOR,selector))>=count,(view,selector)
+              d.execute_script("state.view='intent';renderNav();render();")
+              assert len(d.find_elements(By.CSS_SELECTOR,'[data-question]'))<=3
+              assert not d.find_element(By.CSS_SELECTOR,'[data-share="identity"]').is_selected()
+              assert not d.find_element(By.CSS_SELECTOR,'[data-share="contact"]').is_selected()
+              logs=[x for x in d.get_log('browser') if x['level']=='SEVERE']
+              assert not logs,logs
+              d.set_window_size(390,844);d.get(file);time.sleep(.5)
+              assert not d.execute_script('return document.documentElement.scrollWidth > window.innerWidth + 2')
+              print('browser smoke tests passed')
+          finally:d.quit()
+          PY
+      - name: Prepare artifact
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+        run: |
+          mkdir -p artifact
+          cp "$FILE" 'artifact/MatchEdu_条件式路径预测与真实确认_三语完整交互终审版_20260822.html'
+          cp 'matchedu/MatchEdu_自动修复启动版_20260822.html' 'artifact/MatchEdu_自动修复启动版_20260822.html'
+          cat > artifact/使用说明.txt <<'TXT'
+          推荐直接打开：MatchEdu_条件式路径预测与真实确认_三语完整交互终审版_20260822.html
+          该文件已经过 JavaScript 语法、浏览器核心流程、隐私默认值与 390px 移动端横向溢出检查。
+          自动修复启动版作为在线回退入口保留。
+          TXT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MatchEdu-HTML-20260822
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
