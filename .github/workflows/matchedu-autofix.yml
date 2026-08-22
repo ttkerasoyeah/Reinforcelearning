@@ -1,0 +1,81 @@
+name: MatchEdu targeted repair
+
+on:
+  pull_request:
+    paths:
+      - 'matchedu/**'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Repair planner renderer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          files=list(Path('matchedu').glob('*.html'))
+          assert files, 'HTML not found'
+          p=files[0]
+          s=p.read_text(encoding='utf-8')
+          start=s.index('function renderPlanner(root){')
+          end=s.index('function renderPlannerStep(){')
+          replacement=r'''function plannerStepHint(i){
+ const hints=[
+  T('可多选并自由填写','複数選択と自由記述','Multi-select and free text'),
+  T('只填影响路线的事实','ルートを変える事実のみ','Only route-changing facts'),
+  T('时间、预算、参与方式','時間、予算、参加形態','Time, budget, participation'),
+  T('筛除不愿承担的结果','避けたい結果を除外','Exclude unacceptable outcomes'),
+  T('显示依据和未知项','根拠と未確認を表示','Show evidence and unknowns')
+ ];
+ return local(hints[i]||hints[0]);
+}
+function renderPlanner(root){
+ const d=I18N[state.lang],steps=plannerSteps();
+ root.innerHTML=`<section class="view"><div class="workspace"><aside class="rail"><div class="rail-title"><strong>${esc(d.plannerTitle)}</strong><span>${esc(d.plannerLead)}</span></div><div class="rail-list">${steps.map((stepLabel,i)=>`<button class="rail-btn ${state.plannerStep===i?'active':''} ${state.plannerStep>i?'done':''}" data-step="${i}"><i>${i+1}</i><span><b>${esc(stepLabel)}</b><span>${esc(plannerStepHint(i))}</span></span><em></em></button>`).join('')}</div><div class="rail-foot">${esc(local(T('所有初步路线永久免费。','初期ルートはすべて無料。','All initial routes are free.')))}</div></aside><div class="content">${pageHead('FREE PLANNER',d.plannerTitle,d.plannerLead,`<button class="btn soft" data-go="routes">${esc(d.navRoutes)}</button>`)}<div class="panel" id="plannerPanel"></div></div></div></section>`;
+ renderPlannerStep();
+ document.querySelectorAll('[data-step]').forEach(button=>{
+  button.onclick=()=>{
+   capturePlanner();
+   state.plannerStep=Number(button.dataset.step);
+   render();
+   saveState();
+  };
+ });
+}
+'''
+          s=s[:start]+replacement+s[end:]
+          p.write_text(s,encoding='utf-8')
+          print('patched',p)
+          PY
+      - name: Check JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=next(Path('matchedu').glob('*.html'))
+          s=p.read_text(encoding='utf-8')
+          scripts=re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+      - name: Commit repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add matchedu/*.html
+          if git diff --cached --quiet; then
+            echo 'No changes'
+          else
+            git commit -m 'fix: repair MatchEdu planner renderer syntax'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
