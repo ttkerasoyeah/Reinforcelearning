@@ -1,0 +1,135 @@
+name: MatchEdu temporary repair
+
+on:
+  pull_request:
+    paths:
+      - 'matchedu/**'
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Locate HTML
+        id: locate
+        run: |
+          FILE=$(find matchedu -type f -name '*.html' | head -n 1)
+          test -n "$FILE"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+      - name: Repair planner renderer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          p=Path(os.environ['FILE'])
+          s=p.read_text(encoding='utf-8')
+          if 'function plannerStepHint(i)' not in s:
+              start=s.index('function renderPlanner(root){')
+              end=s.index('function renderPlannerStep(){')
+              replacement=r'''function plannerStepHint(i){
+ const hints=[
+  T('可多选并自由填写','複数選択と自由記述','Multi-select and free text'),
+  T('只填影响路线的事实','ルートを変える事実のみ','Only route-changing facts'),
+  T('时间、预算、参与方式','時間、予算、参加形態','Time, budget, participation'),
+  T('筛除不愿承担的结果','避けたい結果を除外','Exclude unacceptable outcomes'),
+  T('显示依据和未知项','根拠と未確認を表示','Show evidence and unknowns')
+ ];
+ return local(hints[i]||hints[0]);
+}
+function renderPlanner(root){
+ const d=I18N[state.lang],steps=plannerSteps();
+ root.innerHTML=`<section class="view"><div class="workspace"><aside class="rail"><div class="rail-title"><strong>${esc(d.plannerTitle)}</strong><span>${esc(d.plannerLead)}</span></div><div class="rail-list">${steps.map((stepLabel,i)=>`<button class="rail-btn ${state.plannerStep===i?'active':''} ${state.plannerStep>i?'done':''}" data-step="${i}"><i>${i+1}</i><span><b>${esc(stepLabel)}</b><span>${esc(plannerStepHint(i))}</span></span><em></em></button>`).join('')}</div><div class="rail-foot">${esc(local(T('所有初步路线永久免费。','初期ルートはすべて無料。','All initial routes are free.')))}</div></aside><div class="content">${pageHead('FREE PLANNER',d.plannerTitle,d.plannerLead,`<button class="btn soft" data-go="routes">${esc(d.navRoutes)}</button>`)}<div class="panel" id="plannerPanel"></div></div></div></section>`;
+ renderPlannerStep();
+ document.querySelectorAll('[data-step]').forEach(button=>{
+  button.onclick=()=>{
+   capturePlanner();
+   state.plannerStep=Number(button.dataset.step);
+   render();
+   saveState();
+  };
+ });
+}
+'''
+              s=s[:start]+replacement+s[end:]
+              p.write_text(s,encoding='utf-8')
+              print('planner renderer repaired')
+          else:
+              print('planner renderer already repaired')
+          PY
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+      - name: Syntax and static checks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from html.parser import HTMLParser
+          from collections import Counter
+          import re,os
+          p=Path(os.environ['FILE']); text=p.read_text(encoding='utf-8')
+          scripts=re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',text,flags=re.S|re.I)
+          assert scripts
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          class P(HTMLParser):
+              def __init__(self): super().__init__(); self.ids=[]
+              def handle_starttag(self,tag,attrs):
+                  a=dict(attrs)
+                  if 'id' in a:self.ids.append(a['id'])
+          q=P();q.feed(text);dup=[k for k,v in Counter(q.ids).items() if v>1]
+          assert not dup,dup
+          assert all(x in text for x in ['data-lang="zh"','data-lang="ja"','data-lang="en"','replyTypes','routeData','resources'])
+          PY
+          node --check /tmp/app.js
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+      - name: Browser smoke tests
+        run: |
+          python -m pip install --quiet selenium
+          python - <<'PY'
+          import os,time
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.chrome.options import Options
+          file=Path(os.environ['FILE']).resolve().as_uri()
+          o=Options();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage');o.add_argument('--window-size=1440,1000');o.set_capability('goog:loggingPrefs',{'browser':'ALL'})
+          d=webdriver.Chrome(options=o)
+          try:
+              d.get(file);time.sleep(1)
+              assert 'MatchEdu' in d.title and d.find_element(By.ID,'main').is_displayed()
+              for lang,expected in [('ja','ja'),('en','en'),('zh','zh-CN')]:
+                  d.find_element(By.CSS_SELECTOR,f'button[data-lang="{lang}"]').click();time.sleep(.15)
+                  assert d.execute_script('return document.documentElement.lang')==expected
+              for view,selector,min_count in [('planner','#plannerPanel',1),('routes','.route-card',3),('scenario','#simBudget',1),('resources','.resource-card',8),('intent','[data-question]',1),('replies','[data-reply]',8),('work','.task',1),('provider','#providerContent',1),('trust','.check-result',8)]:
+                  d.execute_script(f"state.view='{view}';renderNav();render();");time.sleep(.12)
+                  assert len(d.find_elements(By.CSS_SELECTOR,selector))>=min_count,(view,selector)
+              d.execute_script("state.view='intent';renderNav();render();")
+              assert not d.find_element(By.CSS_SELECTOR,'[data-share="identity"]').is_selected()
+              assert not d.find_element(By.CSS_SELECTOR,'[data-share="contact"]').is_selected()
+              logs=[x for x in d.get_log('browser') if x['level'] in ('SEVERE','WARNING')]
+              assert not logs,logs
+              d.set_window_size(390,844);d.get(file);time.sleep(.4)
+              assert not d.execute_script('return document.documentElement.scrollWidth > window.innerWidth + 2')
+              print('all browser checks passed')
+          finally:d.quit()
+          PY
+        env:
+          FILE: ${{ steps.locate.outputs.file }}
+      - name: Commit repaired HTML
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add matchedu/*.html
+          if git diff --cached --quiet; then
+            echo 'No changes'
+          else
+            git commit -m 'fix: repair and validate MatchEdu HTML'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
