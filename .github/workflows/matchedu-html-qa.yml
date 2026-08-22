@@ -1,0 +1,253 @@
+name: MatchEdu standalone HTML QA
+
+on:
+  push:
+    branches:
+      - feature/matchedu-predictive-demo-20260822
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/matchedu-predictive-demo-20260822
+          fetch-depth: 0
+
+      - name: Apply audited corrections
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互版_20260822.html')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly 1 match, found {count}')
+              text = text.replace(old, new, 1)
+
+          # 1. Fix a JavaScript syntax error in the production-boundary table.
+          replace_once(
+              "${local(L('LocalStorage','LocalStorage','LocalStorage')}</td>",
+              "${local(L('LocalStorage','LocalStorage','LocalStorage'))}</td>",
+              'LocalStorage syntax fix',
+          )
+
+          # 2. Make evidence, graph, and trust views directly reachable.
+          replace_once(
+              "<button class=\"navBtn\" data-view=\"resources\" data-i18n=\"navResources\">真实资源</button>\n      <button class=\"navBtn\" data-view=\"intent\"",
+              "<button class=\"navBtn\" data-view=\"resources\" data-i18n=\"navResources\">真实资源</button>\n      <button class=\"navBtn\" data-view=\"graph\" data-i18n=\"navGraph\">路径图</button>\n      <button class=\"navBtn\" data-view=\"evidence\" data-i18n=\"navEvidence\">证据</button>\n      <button class=\"navBtn\" data-view=\"intent\"",
+              'navigation graph/evidence',
+          )
+          replace_once(
+              "<button class=\"navBtn\" data-view=\"technology\" data-i18n=\"navTech\">技术与信任</button>",
+              "<button class=\"navBtn\" data-view=\"technology\" data-i18n=\"navTech\">技术</button>\n      <button class=\"navBtn\" data-view=\"trust\" data-i18n=\"navTrust\">信任边界</button>",
+              'navigation trust',
+          )
+
+          # 3. Add translations for the new navigation items.
+          replace_once("navResources:'真实资源',navIntent:", "navResources:'真实资源',navGraph:'路径图',navEvidence:'证据账本',navIntent:", 'zh nav labels')
+          replace_once("navTech:'技术与信任',downloadHtml:", "navTech:'技术',navTrust:'信任边界',downloadHtml:", 'zh trust nav')
+          replace_once("navResources:'実在する資源',navIntent:", "navResources:'実在する資源',navGraph:'パス図',navEvidence:'根拠台帳',navIntent:", 'ja nav labels')
+          replace_once("navTech:'技術と信頼',downloadHtml:", "navTech:'技術',navTrust:'信頼と境界',downloadHtml:", 'ja trust nav')
+          replace_once("navResources:'Resources',navIntent:", "navResources:'Resources',navGraph:'Path graph',navEvidence:'Evidence',navIntent:", 'en nav labels')
+          replace_once("navTech:'Technology & trust',downloadHtml:", "navTech:'Technology',navTrust:'Trust boundaries',downloadHtml:", 'en trust nav')
+
+          # 4. Store untouched default Intent text as trilingual values; user edits remain literal.
+          replace_once(
+              "selectedReply:'conditional',evidenceFilter:'all'",
+              "selectedReply:'conditional',questions:[L('2027年4月是否仍计划接收海外申请者？','2027年4月の海外応募者を受け入れる予定ですか？','Do you plan to accept overseas applicants for April 2027?'),L('我的项目经历是否足以进入研究计划讨论？','私のプロジェクト経験で研究計画の相談に進めますか？','Is my project experience sufficient to begin discussing a research plan?')],intentWhy:L('该资源位于我的医疗AI研究与就业路线中，我希望在投入完整申请材料前确认当前条件。','この資源は医療AI研究・就職ルートにあり、全資料を準備する前に現在条件を確認したいです。','This resource sits in my medical AI research and career route. I want to confirm current conditions before investing in a full application.'),intentHave:L('计算机本科、N2、TOEFL 80+、两个深度学习项目。','情報学士、N2、TOEFL 80+、深層学習プロジェクト2件。','CS bachelor, N2, TOEFL 80+, and two deep-learning projects.'),evidenceFilter:'all'",
+              'default trilingual Intent content',
+          )
+          replace_once(
+              "state.questions=state.questions||[local(L('2027年4月是否仍计划接收海外申请者？','2027年4月の海外応募者を受け入れる予定ですか？','Do you plan to accept overseas applicants for April 2027?')),local(L('我的项目经历是否足以进入研究计划讨论？','私のプロジェクト経験で研究計画の相談に進めますか？','Is my project experience sufficient to begin discussing a research plan?'))];",
+              "state.questions=state.questions||[];",
+              'remove language-locked question defaults',
+          )
+          replace_once("value=\"${esc(q)}\" data-q=", "value=\"${esc(local(q))}\" data-q=", 'localized question input')
+          replace_once("state.questions.filter(Boolean).map(q=>`<li>${esc(q)}</li>`)", "state.questions.filter(Boolean).map(q=>`<li>${esc(local(q))}</li>`)", 'localized question preview')
+          replace_once("i.questions.map(q=>esc(q)).join(' / ')", "i.questions.map(q=>esc(local(q))).join(' / ')", 'localized question history')
+          replace_once("document.getElementById('intentWhy').value=state.intentWhy||local(L(", "document.getElementById('intentWhy').value=local(state.intentWhy||L(", 'localized Intent why prefix')
+          replace_once("'This resource sits in my medical AI research and career route. I want to confirm current conditions before investing in a full application.'));", "'This resource sits in my medical AI research and career route. I want to confirm current conditions before investing in a full application.'));", 'localized Intent why closure')
+          replace_once("document.getElementById('intentHave').value=state.intentHave||local(L(", "document.getElementById('intentHave').value=local(state.intentHave||L(", 'localized Intent have prefix')
+          replace_once("'CS bachelor, N2, TOEFL 80+, and two deep-learning projects.'));", "'CS bachelor, N2, TOEFL 80+, and two deep-learning projects.'));", 'localized Intent have closure')
+
+          # 5. Translate select-option labels while retaining stable values.
+          select_helper = r'''
+function renderStaticSelects(){
+  const defs={
+    education:{bachelor:L('本科在读／已毕业','学部在学／卒業','Bachelor student / graduate'),master:L('硕士在读／已毕业','修士在学／修了','Master student / graduate'),college:L('专科／高职','短大／高専','Associate / vocational college'),working:L('已工作','就業中','Working professional')},
+    enLevel:{basic:L('基础','基礎','Basic'),toeic:L('TOEIC 700+','TOEIC 700+','TOEIC 700+'),toefl:L('TOEFL 80+','TOEFL 80+','TOEFL 80+'),ielts:L('IELTS 6.5+','IELTS 6.5+','IELTS 6.5+')},
+    mode:{any:L('线上、混合、赴日都可以','オンライン・ハイブリッド・渡日可','Online, hybrid, or relocation'),online:L('目前只接受线上','現在オンラインのみ','Online only for now'),hybrid:L('优先混合','ハイブリッド優先','Prefer hybrid'),japan:L('可以完整赴日','長期渡日可能','Can relocate to Japan')},
+    location:{overseas:L('目前在海外','現在海外','Currently outside Japan'),japan:L('目前在日本','現在日本','Currently in Japan')},
+    region:{flexible:L('地区灵活','地域は柔軟','Flexible location'),metro:L('只考虑大城市','大都市のみ','Major cities only'),local:L('接受地方城市','地方都市も可','Regional cities accepted')},
+    orgType:{lab:L('研究室','研究室','Lab'),school:L('大学／研究科','大学／研究科','University / graduate school'),company:L('企业','企業','Company'),program:L('课程／项目','講座／プロジェクト','Course / program'),support:L('自治体／支持机构','自治体／支援機関','Municipality / support organization')},
+    intentExpiry:{14:L('14天','14日','14 days'),30:L('30天','30日','30 days'),90:L('90天','90日','90 days')}
+  };
+  const values={education:state.education,enLevel:state.en,mode:state.mode,location:state.location,region:state.region,orgType:document.getElementById('orgType')?.value||'lab',intentExpiry:String(state.intentExpiry||30)};
+  Object.entries(defs).forEach(([id,options])=>{
+    const el=document.getElementById(id);if(!el)return;
+    el.innerHTML=Object.entries(options).map(([value,label])=>`<option value="${value}">${local(label)}</option>`).join('');
+    if(options[values[id]])el.value=values[id];
+  });
+  const jp=document.getElementById('jpLevel');if(jp){jp.innerHTML=['N3','N2','N1','none'].map(v=>`<option value="${v}">${v==='none'?local(L('未考','未受験','Not tested')):v}</option>`).join('');jp.value=state.jp;}
+  const sim=document.getElementById('simJP');if(sim){sim.innerHTML=['N3','N2','N1','none'].map(v=>`<option value="${v}">${v==='none'?local(L('未考','未受験','Not tested')):v}</option>`).join('');sim.value=state.scenario.jp||state.jp;}
+}
+function profileLabel(kind,value){
+  const labels={education:{bachelor:L('本科','学士','Bachelor'),master:L('硕士','修士','Master'),college:L('专科／高职','短大／高専','Associate / vocational'),working:L('已工作','就業中','Working')},mode:{any:L('方式灵活','形式は柔軟','Flexible format'),online:L('仅线上','オンラインのみ','Online only'),hybrid:L('混合优先','ハイブリッド優先','Hybrid preferred'),japan:L('可完整赴日','長期渡日可','Can relocate')}};
+  return local(labels[kind]?.[value]||value);
+}
+function renderReplyDialogTypes(){
+  document.getElementById('replyDialogTypes').innerHTML=replyDefs.map(r=>`<button class="card" data-dialog-reply="${r.id}" style="text-align:left"><span class="badge ${r.color}">${local(r.title)}</span><p>${local(r.desc)}</p></button>`).join('');
+  document.querySelectorAll('[data-dialog-reply]').forEach(b=>b.onclick=()=>{state.selectedReply=b.dataset.dialogReply;saveState();document.getElementById('replyDialog').close();setView('reply')});
+}
+'''
+          replace_once("function renderGoalChoices(){", select_helper + "\nfunction renderGoalChoices(){", 'insert translated select helper')
+          replace_once("<h3>${esc(goalNames||'-')}</h3><p>${esc(state.freeGoal)}</p></article><article class=\"card\"><div class=\"kicker\">Constraints</div><div class=\"badgeRow\"><span class=\"badge blue\">${esc(state.education)}</span>", "<h3>${esc(goalNames||'-')}</h3><p>${esc(state.freeGoal)}</p></article><article class=\"card\"><div class=\"kicker\">Constraints</div><div class=\"badgeRow\"><span class=\"badge blue\">${esc(profileLabel('education',state.education))}</span>", 'localized education summary')
+          replace_once("<span class=\"badge green\">${esc(state.mode)}</span>", "<span class=\"badge green\">${esc(profileLabel('mode',state.mode))}</span>", 'localized mode summary')
+          replace_once("function renderAll(){renderGoalChoices();", "function renderAll(){renderStaticSelects();renderGoalChoices();", 'call select translation')
+          replace_once("renderTrust();renderOnboardingChoices()}", "renderTrust();renderOnboardingChoices();renderReplyDialogTypes()}", 'refresh reply dialog translations')
+
+          # 6. Correct resource cost sorting.
+          replace_once("list.sort((a,b)=>parseInt(local(a.cost))||9999-(parseInt(local(b.cost))||9999));", "list.sort((a,b)=>(parseInt(local(a.cost))||9999)-(parseInt(local(b.cost))||9999));", 'resource cost comparator')
+
+          # 7. Require at least one non-empty question before saving an Intent.
+          replace_once("function saveIntent(){const r=resources.find", "function saveIntent(){if(!state.questions.some(q=>String(local(q)).trim())){toast(local(L('请至少填写一个明确问题','少なくとも一つ明確な質問を入力してください','Enter at least one clear question')));return}const r=resources.find", 'Intent validation')
+
+          # 8. Make onboarding type values stable and translatable.
+          replace_once("<select id=\"orgType\"><option>研究室</option><option>大学/研究科</option><option>企业</option><option>课程/项目</option><option>自治体/支持机构</option></select>", "<select id=\"orgType\"><option value=\"lab\">研究室</option><option value=\"school\">大学/研究科</option><option value=\"company\">企业</option><option value=\"program\">课程/项目</option><option value=\"support\">自治体/支持机构</option></select>", 'stable onboarding values')
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Extract and syntax-check JavaScript
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          html=Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互版_20260822.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',html,flags=re.S|re.I)
+          if len(scripts)!=1:
+              raise SystemExit(f'Expected one inline script, found {len(scripts)}')
+          Path('/tmp/matchedu-app.js').write_text(scripts[0],encoding='utf-8')
+      - run: node --check /tmp/matchedu-app.js
+
+      - name: Static HTML checks
+        shell: python
+        run: |
+          from pathlib import Path
+          from html.parser import HTMLParser
+          import re
+
+          html=Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互版_20260822.html').read_text(encoding='utf-8')
+          class Audit(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.ids=[]; self.buttons=[]; self.current_button=None
+              def handle_starttag(self,tag,attrs):
+                  d=dict(attrs)
+                  if 'id' in d:self.ids.append(d['id'])
+                  if tag=='button':self.current_button={'aria':d.get('aria-label',''),'text':''};self.buttons.append(self.current_button)
+              def handle_data(self,data):
+                  if self.current_button is not None:self.current_button['text']+=data
+              def handle_endtag(self,tag):
+                  if tag=='button':self.current_button=None
+          a=Audit();a.feed(html)
+          dup=sorted({x for x in a.ids if a.ids.count(x)>1})
+          if dup:raise SystemExit(f'Duplicate ids: {dup}')
+          unnamed=[i for i,b in enumerate(a.buttons) if not (b['aria'].strip() or b['text'].strip())]
+          if unnamed:raise SystemExit(f'Unnamed buttons: {unnamed}')
+          for bad in ('[object Object]','>undefined<'):
+              if bad in html:raise SystemExit(f'Forbidden output marker: {bad}')
+          required=['view-home','view-planner','view-routes','view-scenario','view-graph','view-evidence','view-resources','view-intent','view-reply','view-workbench','view-pricing','view-provider','view-technology','view-trust']
+          missing=[x for x in required if f'id="{x}"' not in html]
+          if missing:raise SystemExit(f'Missing views: {missing}')
+          print(f'HTML static audit passed: {len(a.ids)} ids, {len(a.buttons)} buttons')
+
+      - name: Browser runtime checks
+        run: |
+          python -m pip install --quiet selenium
+          python - <<'PY'
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          import time
+
+          p=Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互版_20260822.html').resolve()
+          opts=Options();opts.add_argument('--headless=new');opts.add_argument('--no-sandbox');opts.add_argument('--disable-dev-shm-usage');opts.add_argument('--window-size=1440,1000');opts.set_capability('goog:loggingPrefs',{'browser':'ALL'})
+          driver=webdriver.Chrome(options=opts)
+          try:
+              driver.get(p.as_uri());time.sleep(1)
+              assert '先看清' in driver.find_element(By.TAG_NAME,'body').text
+              driver.find_element(By.CSS_SELECTOR,'[data-view="planner"]').click();time.sleep(.2)
+              assert driver.find_element(By.ID,'view-planner').is_displayed()
+              driver.find_element(By.ID,'langSelect').send_keys('en');time.sleep(.4)
+              assert driver.find_element(By.ID,'view-planner').get_attribute('textContent').find('Clarify goals')>=0
+              driver.find_element(By.CSS_SELECTOR,'[data-view="scenario"]').click();time.sleep(.3)
+              assert driver.find_element(By.ID,'scenarioDeltas').text.strip()
+              driver.find_element(By.CSS_SELECTOR,'[data-view="intent"]').click();time.sleep(.3)
+              add=driver.find_element(By.ID,'addQuestion')
+              # Default is two questions; add the third and verify the cap.
+              add.click();time.sleep(.2)
+              assert add.get_attribute('disabled') is not None
+              driver.find_element(By.CSS_SELECTOR,'[data-view="reply"]').click();time.sleep(.3)
+              cards=driver.find_elements(By.CSS_SELECTOR,'[data-reply]')
+              assert len(cards)==8
+              cards[1].click();time.sleep(.3)
+              assert '14' in driver.find_element(By.ID,'afterReply').text
+              driver.find_element(By.CSS_SELECTOR,'[data-view="technology"]').click();time.sleep(.3)
+              assert 'LocalStorage' in driver.find_element(By.ID,'productionBoundary').text
+              driver.find_element(By.CSS_SELECTOR,'[data-view="trust"]').click();time.sleep(.3)
+              assert driver.find_element(By.ID,'selfCheck').text.strip()
+              logs=[x for x in driver.get_log('browser') if x['level'] in ('SEVERE','WARNING')]
+              if logs:raise AssertionError(logs)
+              width=driver.execute_script('return document.documentElement.scrollWidth')
+              viewport=driver.execute_script('return window.innerWidth')
+              assert width<=viewport+1,(width,viewport)
+          finally:
+              driver.quit()
+          print('Desktop browser QA passed')
+          PY
+
+      - name: Mobile overflow and language check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          import time
+          p=Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互版_20260822.html').resolve()
+          opts=Options();opts.add_argument('--headless=new');opts.add_argument('--no-sandbox');opts.add_argument('--disable-dev-shm-usage');opts.add_argument('--window-size=390,844');opts.set_capability('goog:loggingPrefs',{'browser':'ALL'})
+          d=webdriver.Chrome(options=opts)
+          try:
+              d.get(p.as_uri());time.sleep(.7)
+              assert d.execute_script('return document.documentElement.scrollWidth')<=d.execute_script('return window.innerWidth')+1
+              d.find_element(By.ID,'langSelect').send_keys('ja');time.sleep(.3)
+              assert d.execute_script('return document.documentElement.lang')=='ja'
+              d.find_element(By.ID,'menuBtn').click();time.sleep(.2)
+              assert 'open' in d.find_element(By.ID,'mainNav').get_attribute('class')
+              logs=[x for x in d.get_log('browser') if x['level'] in ('SEVERE','WARNING')]
+              if logs:raise AssertionError(logs)
+          finally:d.quit()
+          print('Mobile QA passed')
+          PY
+
+      - name: Commit corrected and validated HTML
+        run: |
+          if git diff --quiet; then
+            echo 'No patch changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互版_20260822.html
+          git commit -m 'fix: audit MatchEdu interactions, translations, and runtime'
+          git push origin HEAD:feature/matchedu-predictive-demo-20260822
