@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071c3a">
+<title>MatchEdu｜正在加载完整交互版</title>
+<style>
+:root{--navy:#071c3a;--blue:#3475f4;--green:#0d7b58;--ink:#14233a;--muted:#687890;--line:#dce5f0;--paper:#f3f7fb}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 0 0,rgba(52,117,244,.12),transparent 32rem),var(--paper);color:var(--ink);font-family:Inter,"Noto Sans SC","Noto Sans JP","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif}.card{width:min(680px,calc(100vw - 28px));padding:34px;border:1px solid var(--line);border-radius:24px;background:#fff;box-shadow:0 24px 70px rgba(7,28,58,.14)}.brand{display:flex;align-items:center;gap:12px}.mark{width:46px;height:46px;border-radius:15px;background:linear-gradient(145deg,#174ec7,#0fa0b3);display:grid;place-items:center;color:#fff;font-weight:950}.brand b{font-size:20px}.brand span{display:block;margin-top:3px;color:var(--muted);font-size:11px}.loader{height:9px;margin:25px 0 17px;border-radius:999px;background:#e9eef5;overflow:hidden}.loader i{display:block;width:38%;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--blue),#7aa3ff);animation:load 1.2s ease-in-out infinite alternate}@keyframes load{to{transform:translateX(165%)}}h1{font-size:27px;margin:0 0 10px}p{margin:0;color:var(--muted);line-height:1.7;font-size:13px}.status{margin-top:18px;padding:13px;border-radius:13px;background:#f7f9fd;color:var(--muted);font-size:12px;white-space:pre-wrap}.status.ok{background:#eaf8f2;color:var(--green)}.status.fail{background:#ffedf0;color:#a63848}.btn{display:none;margin-top:15px;min-height:44px;border:0;border-radius:12px;background:var(--navy);color:#fff;padding:10px 15px;font-weight:850;cursor:pointer}.btn.show{display:inline-flex}
+</style>
+</head>
+<body>
+<main class="card">
+<div class="brand"><div class="mark">M</div><div><b>MatchEdu</b><span>条件式路径预测与真实确认</span></div></div>
+<div class="loader" id="loader"><i></i></div>
+<h1 id="title">正在加载完整三语交互版</h1>
+<p>启动页会读取项目文件、修复已知的脚本括号问题、完成浏览器语法检查，再打开完整页面。打开完整页面后，可在页脚点击“下载HTML”保存离线副本。</p>
+<div class="status" id="status">连接项目文件……</div>
+<button class="btn" id="retry">重新加载</button>
+</main>
+<script>
+'use strict';
+const RAW='https://raw.githubusercontent.com/ttkerasoyeah/Reinforcelearning/feature/matchedu-predictive-system-20260822/matchedu/MatchEdu_%E6%9D%A1%E4%BB%B6%E5%BC%8F%E8%B7%AF%E5%BE%84%E9%A2%84%E6%B5%8B%E4%B8%8E%E7%9C%9F%E5%AE%9E%E7%A1%AE%E8%AE%A4_%E4%B8%89%E8%AF%AD%E5%AE%8C%E6%95%B4%E4%BA%A4%E4%BA%92%E7%89%88_20260822.html';
+const status=document.getElementById('status');
+const retry=document.getElementById('retry');
+const loader=document.getElementById('loader');
+function patch(text){
+ const replacements=[
+  ["Only route-changing facts')):i===2","Only route-changing facts'))):i===2"],
+  ["Time, budget, participation')):i===3","Time, budget, participation'))):i===3"],
+  ["Exclude unacceptable outcomes')):esc","Exclude unacceptable outcomes'))):esc"]
+ ];
+ let count=0;
+ for(const [from,to] of replacements){if(text.includes(from)){text=text.replace(from,to);count++;}}
+ return {text,count};
+}
+async function boot(){
+ retry.classList.remove('show');loader.hidden=false;status.className='status';status.textContent='读取完整项目文件……';
+ try{
+  const response=await fetch(RAW,{cache:'no-store'});
+  if(!response.ok)throw new Error('项目文件读取失败：HTTP '+response.status);
+  const source=await response.text();
+  status.textContent='修复已知问题并进行语法检查……';
+  const result=patch(source);
+  const scripts=[...result.text.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map(m=>m[1]);
+  if(!scripts.length)throw new Error('没有找到应用脚本。');
+  new Function(scripts.join('\n'));
+  status.className='status ok';status.textContent='检查通过。已修复 '+result.count+' 处，正在打开完整页面……';
+  const blob=new Blob([result.text],{type:'text/html;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  setTimeout(()=>location.replace(url),450);
+ }catch(error){
+  loader.hidden=true;status.className='status fail';status.textContent='加载未完成：\n'+String(error&&error.stack?error.stack:error);retry.classList.add('show');
+ }
+}
+retry.addEventListener('click',boot);boot();
+</script>
+</body>
+</html>
