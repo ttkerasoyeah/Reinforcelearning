@@ -1,0 +1,125 @@
+name: MatchEdu stable HTML QA
+
+on:
+  pull_request:
+    branches:
+      - qa/matchedu-html-validation-base
+    paths:
+      - 'matchedu/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract and syntax-check JavaScript
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          path=Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互稳定版_20260822.html')
+          html=path.read_text(encoding='utf-8')
+          scripts=re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',html,flags=re.S|re.I)
+          if len(scripts)!=1:
+              raise SystemExit(f'Expected one inline script, found {len(scripts)}')
+          Path('/tmp/matchedu.js').write_text(scripts[0],encoding='utf-8')
+      - run: node --check /tmp/matchedu.js
+
+      - name: Static HTML audit
+        shell: python
+        run: |
+          from pathlib import Path
+          from html.parser import HTMLParser
+          html=Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互稳定版_20260822.html').read_text(encoding='utf-8')
+          class Audit(HTMLParser):
+              def __init__(self):
+                  super().__init__();self.ids=[];self.buttons=[];self.current=None
+              def handle_starttag(self,tag,attrs):
+                  d=dict(attrs)
+                  if 'id' in d:self.ids.append(d['id'])
+                  if tag=='button':self.current={'text':'','aria':d.get('aria-label','')};self.buttons.append(self.current)
+              def handle_data(self,data):
+                  if self.current is not None:self.current['text']+=data
+              def handle_endtag(self,tag):
+                  if tag=='button':self.current=None
+          a=Audit();a.feed(html)
+          dup=sorted({x for x in a.ids if a.ids.count(x)>1})
+          if dup:raise SystemExit(f'Duplicate ids: {dup}')
+          unnamed=[i for i,b in enumerate(a.buttons) if not (b['text'].strip() or b['aria'].strip())]
+          if unnamed:raise SystemExit(f'Unnamed buttons: {unnamed}')
+          required=['view-home','view-planner','view-routes','view-scenario','view-graph','view-evidence','view-resources','view-intent','view-reply','view-workbench','view-pricing','view-provider','view-technology','view-trust']
+          missing=[x for x in required if x not in a.ids]
+          if missing:raise SystemExit(f'Missing views: {missing}')
+          if '[object Object]' in html or '>undefined<' in html:raise SystemExit('Forbidden output marker')
+          print(f'Passed static audit: {len(a.ids)} ids, {len(a.buttons)} buttons')
+
+      - name: Browser interaction QA
+        run: |
+          python -m pip install --quiet selenium
+          python - <<'PY'
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import Select
+          import time
+          path=Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互稳定版_20260822.html').resolve()
+          options=Options();options.add_argument('--headless=new');options.add_argument('--no-sandbox');options.add_argument('--disable-dev-shm-usage');options.add_argument('--window-size=1440,1000');options.set_capability('goog:loggingPrefs',{'browser':'ALL'})
+          d=webdriver.Chrome(options=options)
+          try:
+              d.get(path.as_uri());time.sleep(.8)
+              assert '先看清' in d.find_element(By.TAG_NAME,'body').text
+              d.find_element(By.CSS_SELECTOR,'[data-go="planner"]').click();time.sleep(.2)
+              assert d.find_element(By.ID,'view-planner').is_displayed()
+              Select(d.find_element(By.ID,'language')).select_by_value('en');time.sleep(.4)
+              assert d.execute_script('return document.documentElement.lang')=='en'
+              assert 'Clarify goals' in d.find_element(By.ID,'view-planner').text
+              d.find_element(By.CSS_SELECTOR,'[data-go="scenario"]').click();time.sleep(.3)
+              assert d.find_element(By.ID,'scenarioDeltas').text.strip()
+              d.find_element(By.CSS_SELECTOR,'[data-go="intent"]').click();time.sleep(.3)
+              add=d.find_element(By.ID,'addQuestion');add.click();time.sleep(.2)
+              assert add.get_attribute('disabled') is not None
+              d.find_element(By.CSS_SELECTOR,'[data-go="reply"]').click();time.sleep(.3)
+              cards=d.find_elements(By.CSS_SELECTOR,'[data-reply]');assert len(cards)==8
+              cards[1].click();time.sleep(.3)
+              assert '14' in d.find_element(By.ID,'afterReply').text
+              d.find_element(By.CSS_SELECTOR,'[data-go="technology"]').click();time.sleep(.3)
+              assert 'LocalStorage' in d.find_element(By.ID,'productionTable').text
+              d.find_element(By.CSS_SELECTOR,'[data-go="trust"]').click();time.sleep(.3)
+              assert d.find_element(By.ID,'selfCheckGrid').text.strip()
+              errors=[x for x in d.get_log('browser') if x['level'] in ('SEVERE','WARNING')]
+              if errors:raise AssertionError(errors)
+              width=d.execute_script('return document.documentElement.scrollWidth');viewport=d.execute_script('return window.innerWidth');assert width<=viewport+1,(width,viewport)
+          finally:d.quit()
+          print('Desktop browser QA passed')
+          PY
+
+      - name: Mobile QA
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import Select
+          import time
+          path=Path('matchedu/MatchEdu_条件式路径预测与真实确认_三语完整交互稳定版_20260822.html').resolve()
+          options=Options();options.add_argument('--headless=new');options.add_argument('--no-sandbox');options.add_argument('--disable-dev-shm-usage');options.add_argument('--window-size=390,844');options.set_capability('goog:loggingPrefs',{'browser':'ALL'})
+          d=webdriver.Chrome(options=options)
+          try:
+              d.get(path.as_uri());time.sleep(.7)
+              assert d.execute_script('return document.documentElement.scrollWidth')<=d.execute_script('return window.innerWidth')+1
+              Select(d.find_element(By.ID,'language')).select_by_value('ja');time.sleep(.3)
+              assert d.execute_script('return document.documentElement.lang')=='ja'
+              d.find_element(By.ID,'menu').click();time.sleep(.2)
+              assert 'open' in d.find_element(By.ID,'nav').get_attribute('class')
+              errors=[x for x in d.get_log('browser') if x['level'] in ('SEVERE','WARNING')]
+              if errors:raise AssertionError(errors)
+          finally:d.quit()
+          print('Mobile browser QA passed')
+          PY
