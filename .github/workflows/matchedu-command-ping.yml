@@ -1,0 +1,24 @@
+name: MatchEdu command diagnostic
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  ping:
+    if: github.event.issue.pull_request && github.event.comment.body == '/ping-matchedu'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'MatchEdu command workflow is active.'
+            })
